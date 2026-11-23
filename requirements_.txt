@@ -1,0 +1,11 @@
+pyside6
+pywin32
+qrcode
+pdfkit
+pillow
+pyserial
+pythonImageConverter
+PyPDF2
+win32printing
+pywin32
+cryptography

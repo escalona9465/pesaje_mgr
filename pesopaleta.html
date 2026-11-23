@@ -1,0 +1,99 @@
+<div class = "content">
+            <table class = "top-box">
+                <tr>
+                    <td class = "box icon-space">
+                        <table>
+                            <tr><img src=" """+absPathNormal("sources/logo.png")+""" " class = "logo" /></tr>
+                            <tr><h6 class = "rif_label">J-00025642-0</h6></tr>
+                        </table>
+                    </td>
+                    <td class = ""><h2 class = "main-title"> LISTA DE EMPAQUE EN PESO </h2></td>
+                </tr>           
+            </table>
+            <table>
+                <tr class = "line-box">
+                    <td class = "box width-1">1.</td>
+                    <td class = "box width-4"> Fecha y hora de Elaboraci&oacute;n: </td>
+                    <td class = "box  width-5">"""+date+"""</td>
+                </tr>
+                <tr class = "line-box">
+                    <td class = "box width-1">2.</td>
+                    <td class = "box width-4"> C&oacute;digo de Cliente: </td>
+                    <td class = "box width-5">"""+clientCode+"""</td>
+                </tr> 
+                <tr class = "line-box">
+                    <td class = "box width-1">3.</td>
+                    <td class = "box width-4"> Nombre de Cliente: </td>
+                    <td class = "box width-5">"""+clientName+"""</td>
+                </tr> 
+                <tr class = "line-box">
+                    <td class = "box width-1">4.</td>
+                    <td class = "box width-4"> C&oacute;digo del Producto: </td>
+                    <td class = "box width-5">"""+productCode+"""</td>
+                </tr> 
+                <tr class = "line-box">
+                    <td class = "box width-1">5.</td>
+                    <td class = "box width-4"> Nombre de Producto: </td>
+                    <td class = "box width-5">"""+productName+"""</td>
+                </tr>
+                <table>
+                    <tr class = "line-box">
+                        <td class = "box width-1">6.</td>
+                        <td class = "box width-7"> Orden de producci&oacute;n: </td>
+                        <td class = "box width-8">"""+op+"""</td>
+
+                        <td class = "box width-1">7.</td>
+                        <td class = "box width-9"> N&deg; Paletas: </td>
+                        <td class = "box width-10">"""+paletas+"""</td>
+                    </tr>            
+                </table>
+                <table>
+                    <tr class = "line-box">
+                        <td class = "box width-1">8.</td>
+                        <td class = "box width-2"> Tara: </td>
+                        <td class = "box width-2">"""+tara+"""</td>
+                        <td class = "box width-3"> Kg </td>
+                        <td class = "box width-6"></td>
+                    </tr>             
+                </table> 
+                                    
+            </table>
+            """+placeStrTable(header)+"""
+            """+placeStrTable(data)+"""
+            <table>
+                <tr class = "line-box">
+                    <td class = "box width-1">12.</td>
+                    <td class = "box width-21"> Bobinas: </td>
+                    <td class = "box  width-20">"""+ bobinas +"""</td>
+
+                    <td class = "box width-1">13.</td>
+                    <td class = "box width-21"> Peso Bruto: </td>
+                    <td class = "box width-24">"""+ pesoBruto +"""</td>
+                    <td class = "box width-1"> kg </td>
+                </tr>                    
+            </table>
+            <table>
+                <tr class = "line-box">
+                    <td class = "box width-1">14.</td>
+                    <td class = "box width-21"> Peso Neto: </td>
+                    <td class = "box width-20">"""+ pesoNeto +"""</td>
+                    <td class = "box width-1"> kg </td>
+                    <td class = "box width-19"></td> 
+                </tr>           
+            </table>
+            <table>
+                <tr class = "line-box">
+                    <td class = "box width-1">15.</td>
+                    <td class = "box width-21"> Usuario: </td>
+                    <td class = "box width-20">"""+username+"""</td>
+                    <td class = "box width-1">16.</td>
+                    <td class = "box width-21"> Supervisor: </td>
+                    <td class = "box width-20">"""+supervisor+"""</td>               
+                </tr>           
+            </table>
+            <table>
+                <tr class = "line-box">
+                    <td class = "box width-16 text-right"> """+ mgrCode +"""</td>          
+                </tr>          
+            </table>
+        </div>

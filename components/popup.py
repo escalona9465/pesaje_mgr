@@ -363,13 +363,11 @@ class PopUp(QWidget):
         client = mgrObject.getAnClient(clientCode)
         ###print("get client result: ",client)
 
-        resultCoils,coils = mgrObject.getCoilsOnDB()
+        resultCoils, sameCoils = mgrObject.dbMGR.getcoilsOP(op)
         resultUsr,users = mgrObject.getUsrOnDB() # check if report need users or client names
         #resultClient,clients = mgrObject.getClientsOnDB()
         dataDetailed = []
         if resultCoils and len(client)>0 and len(ops) and len(product):
-            ###print("data =>",coils[0],ops,product)
-            sameCoils = getTheSameCoils(coils,op)
             dataDetailed = getDataDetailed(sameCoils,tara,users)
         ##print("looking for op detailed:",op," result ",dataDetailed)
 
@@ -440,11 +438,14 @@ class PopUp(QWidget):
                 dataTurn = []
                 totalUnd = 0.0
                 totalKgOp = 0.0
+                baseProcess = mgrObject.dbMGR.Obtenter_Tabla_condicionada(
+                    "proceso_bobina", "*", f"fecha_emision BETWEEN '{fromDate}' AND '{toDate}'"
+                )
                 for k in range(1,len(self.users)):
                     userRow = self.users[k] 
                     nameOp_ = nameOp_ + str(userRow[3]) +" "+ str(userRow[4]) + "\n"
                     numOp_ = numOp_ + str(userRow[5]) + "\n"
-                    resultProcess,arrProcess = mgrObject.getCoilsOnDB()
+                    arrProcess = baseProcess
                     print(f"Texto en seleccion: {self.turno.currentText()}")
                     if self.turno.currentText() != "TURNO-COMPLETO":
                         arrProcess = getCoilsInRange(fromDate,toDate,initHora,endHora,arrProcess)
@@ -908,7 +909,7 @@ class PopUp(QWidget):
         pallet = opRow[2] #self.nroPallet.text() check if this is like that
                           # You are taking the total of pallets, please check if need to take actual pallet instead.                         
 
-        successCoils, coils = mgrObject.getCoilsOnDB()
+        successCoils, coilsForPallet = mgrObject.dbMGR.getcoilsOP(op)
         resultClients,arrClients = mgrObject.getClientsOnDB()
         resultProducts,arrProducts = mgrObject.getProductsOnDB()
 
@@ -918,8 +919,6 @@ class PopUp(QWidget):
         userName = mgrObject.getUser()["usuario"]
 
         date = getFullDate()
-
-        coilsForPallet = getTheSameCoils(coils,op)
 
         pesoBruto, pesoNeto = getTotalsForPallet(coilsForPallet)
         dataPallet = getTicketsForPallet(coilsForPallet)
@@ -1016,21 +1015,16 @@ class PopUp(QWidget):
         checkPaleta = self.checkPaleta.isChecked()
 
         mgrObject = self.action.obj
-        result,self.tickets = mgrObject.getCoilsOnDB()
-        #print("result getting coils=>",self.tickets)
-        if result:
-            if checkOp:
-                self.tickets = seekTicketsByOp(self.tickets,op)
-                #print("get tickets result =>",self.tickets)
-            elif checkNumero:
-                self.tickets = seekTicketsByNumero(self.tickets,numero)
-                #print("get tickets result =>",self.tickets)
-            elif checkFicha:
-                self.tickets = seekTicketsByFicha(self.tickets,ficha)
-                #print("get tickets result =>",self.tickets)
-            elif checkPaleta:
-                self.tickets = seekTicketsByPaleta(self.tickets,paleta)
-                #print("get tickets result =>",self.tickets)
+        if checkOp:
+            result,self.tickets = mgrObject.dbMGR.getTableByRow("proceso_bobina","op",op)
+        elif checkNumero:
+            result,self.tickets = mgrObject.dbMGR.getTableByRow("proceso_bobina","ticket",numero)
+        elif checkFicha:
+            result,self.tickets = mgrObject.dbMGR.getTableByRow("proceso_bobina","ficha",ficha)
+        elif checkPaleta:
+            result,self.tickets = mgrObject.dbMGR.getTableByRow("proceso_bobina","n_paleta",paleta)
+        else:
+            result,self.tickets = False, []
 
         self.table.clear()
         self.items = []

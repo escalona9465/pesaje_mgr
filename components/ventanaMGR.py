@@ -28,15 +28,10 @@ class PesajeMGR(QMainWindow):
         self.setWindowIcon(getMGRIcon())
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
-        db_piezas_path = "components/database/piezas.db"
-        self.dbPiezaMGR = DBHandler(db_piezas_path)
-        
-        db_path = "components/database/pesaje.db"
-        self.dbMGR = DBHandler(db_path)
-        self.dbCypher = DBCypher(db_path)
-        """if self.isDBEncrypted():
-            self.dbCypher.decryptDB()"""
-        self.dbCypher.setPath(db_path)
+        self.dbPiezaMGR = DBHandler("piezas")
+        self.dbMGR = DBHandler("pesaje")
+        self.dbCypher = DBCypher("pesaje")
+        self.dbCypher.setPath("pesaje")
         result,test = self.dbMGR.getTable_2("bobinas","op")
         #print(test)
         config = self.getConfigOnDB()
@@ -2053,7 +2048,7 @@ class PesajeMGR(QMainWindow):
                 ((fecha_emision BETWEEN '{fecha_inicio_}' AND '{fecha_fin}') AND (hora >= '{hora_inicio_modificada}' and hora<='{hora_final_modificada}'))
 
                     AND 
-                    --ficha de operador
+                    -- ficha de operador
                     (ficha='{ficha}')
                 )
                 )"""
@@ -2068,7 +2063,7 @@ class PesajeMGR(QMainWindow):
                 -- Rango de fechas general, con un rango de horas general aplicado
                 ((fecha_emision BETWEEN '{fecha_inicio_modificado_str}' AND '{fecha_fin_modificado_str}') AND ((hora>='{hora_inicio_modificada}') or (hora<'{hora_final_modificada}'))))
                 AND
-                --ficha de operador
+                -- ficha de operador
                 (ficha='{ficha}')
                 )"""
                 #print(where)
@@ -2082,7 +2077,7 @@ class PesajeMGR(QMainWindow):
                     -- Rango de horas para la última fecha (aplicado solo a esta fecha)
                     (fecha_emision = '{fecha_fin}' AND hora <= '{hora_final_modificada}')) 
                     AND 
-                    --ficha de operador
+                    -- ficha de operador
                     (ficha='{ficha}')
                     )"""
                     #print(where)
@@ -2094,7 +2089,7 @@ class PesajeMGR(QMainWindow):
                     ((fecha_emision BETWEEN '{fecha_inicio_}' AND '{fecha_fin}') AND (hora >= '{hora_inicio_modificada}' and hora<='{hora_final_modificada}'))
 
                     AND 
-                    --ficha de operador
+                    -- ficha de operador
                     (ficha='{ficha}')
                 )
                 )"""
@@ -2189,7 +2184,7 @@ class PesajeMGR(QMainWindow):
 
     def getAnTicketPieza(self,ticket):
         table = []
-        result,table = self.dbMGR.getTableByRow("proceso_pieza","ticket",ticket)
+        result,table = self.dbPiezaMGR.getTableByRow("proceso_pieza","ticket",ticket)
         #print("\n","Success getting ticekt pieza with => ",table,"\n")
         if result:
             try:

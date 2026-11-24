@@ -101,7 +101,7 @@ def inputHablador(obj):
 
         opRow = mgrObject.getAnOp(op)
 
-        success1,process = mgrObject.getCoilsOnDB()
+        success1,process = mgrObject.dbMGR.getcoilsOP(op)
         success2,products = mgrObject.getProductsOnDB()
 
         #position = getPosByOp(opRow,op) # position is not the current pallet of 'talker'

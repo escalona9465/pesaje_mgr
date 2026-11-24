@@ -1,603 +1,580 @@
-from importlib.resources import path
-import sqlite3,time
-from cryptography.fernet import Fernet
+import os
+import time
+import mysql.connector
+from dotenv import load_dotenv
 
-# key = b'B-8jec8Y8UPWfBWLMxvck2NwMCl8eqEb4uGA-Ms4zlQ='
+load_dotenv()
+
 
 class DBCypher():
-    def __init__(self,DBPath) -> None:
+    """Kept for backward compatibility with imports; file encryption is not used with MySQL."""
+    def __init__(self, DBPath=None) -> None:
         self.db_path = DBPath
 
     def encryptDB(self):
-        fernet = Fernet(self.readKey())
-        with open(self.db_path, 'rb') as file:
-            original = file.read()
-            encrypted = fernet.encrypt(original)
-        with open(self.db_path, 'wb') as encrypted_file:
-            encrypted_file.write(encrypted)
+        pass
 
     def decryptDB(self):
-        fernet = Fernet(self.readKey())
-        with open(self.db_path, 'rb') as enc_file:
-            encrypted = enc_file.read()
-        decrypted = fernet.decrypt(encrypted)
-        with open(self.db_path, 'wb') as dec_file:
-            dec_file.write(decrypted)
+        pass
 
     def readKey(self):
         return b's69FfUDlS3PKvxlCsigAzKs0hhYRSoTzcfyKiRPYJ3s='
 
-    def setPath(self,path):
+    def setPath(self, path):
         self.db_path = path
 
-class DBHandler():
-    def __init__(self,dbPath) -> None:
-        self.dbPath = dbPath
-        self.connection = None
-        if self.connect():
-            pass
-            print("Success connecting to database")
-            self.cursor = self.connection.cursor()
-        else:
-            pass
-            print("Fail trying to connect to database")
 
-    # columns = [type1:field1,type2:field2,type3:field3,...,typen:filedn]
-    # statement = "CREATE TABLE IF NOT EXISTS tabla1(unix REAL, fecha TEXT, palabraclave TEXT, valor REAL)
-    def createTable(self,tableName,types,fields):
-        statement = "CREATE TABLE IF NOT EXISTS "+tableName + "("
-        for k in range(len(types)):
-            if k < (len(types)-1):
-                statement = statement + fields[k] + " " + types[k] + ","
-            else:
-                statement = statement + fields[k] + " " + types[k] + ")"
+class DBHandler():
+    _NUMERIC_NULLABLE_COLUMNS = {
+        "bobinas": {"bobinas_paleta"},
+        "habladores": {"posicion"},
+        "productos": {"peso_max", "peso_min"},
+    }
+
+    def __init__(self, dbPath=None) -> None:
+        self.dbPath = dbPath
+        self.database = self._resolve_database_name(dbPath)
+        self.connection = None
+        self.cursor = None
+        if self.connect():
+            print(f"Success connecting to MySQL database: {self.database}")
+        else:
+            print(f"Fail trying to connect to MySQL database: {self.database}")
+
+    @staticmethod
+    def _resolve_database_name(dbPath):
+        """Maps legacy SQLite paths or logical names ('pesaje', 'piezas') to env-configured MySQL DB names."""
+        pesaje_db = os.getenv("MYSQL_DB_PESAJE", "pesaje")
+        piezas_db = os.getenv("MYSQL_DB_PIEZAS", "piezas")
+        if not dbPath:
+            return pesaje_db
+        normalized = str(dbPath).replace("\\", "/").lower()
+        if "piezas" in normalized:
+            return piezas_db
+        if "pesaje" in normalized:
+            return pesaje_db
+        return str(dbPath)
+
+    def _ensure_connection(self):
+        if self.connection is None or not self.connection.is_connected():
+            self.connect()
+        else:
+            try:
+                self.connection.ping(reconnect=True, attempts=3, delay=1)
+            except Exception:
+                self.connect()
+
+    def connect(self):
         result = False
         try:
-            self.cursor.execute(statement)
+            self.connection = mysql.connector.connect(
+                host=os.getenv("MYSQL_HOST", "localhost"),
+                port=int(os.getenv("MYSQL_PORT", "3306")),
+                user=os.getenv("MYSQL_USER", "root"),
+                password=os.getenv("MYSQL_PASSWORD", ""),
+                database=self.database,
+                charset="utf8mb4",
+                autocommit=False,
+            )
+            self.cursor = self.connection.cursor(buffered=True)
             result = True
         except Exception as e:
             print(e)
-            pass
         return result
 
-        
-    # keyValue is inserted on values at the end of sentense
-    def updateValue(self,tableName,keyValue,keyUbicacion):
-        # check first if data lenght match width the table to store data...
-        #print(f"Usuario: {keyValue}. Password: {keyUbicacion}.")
-        statement = "UPDATE "+tableName +" SET "+keyValue[0]+" = ? WHERE "+ keyUbicacion[0] + "=?;"
+    def createTable(self, tableName, types, fields):
+        statement = f"CREATE TABLE IF NOT EXISTS `{tableName}` ("
+        cols = []
+        for k in range(len(types)):
+            cols.append(f"`{fields[k]}` {types[k]}")
+        statement += ", ".join(cols) + ")"
         result = False
         try:
-            #print("statement: ",statement)
-            self.cursor.execute(statement,(keyValue[1],keyUbicacion[1],)) 
+            self._ensure_connection()
+            self.cursor.execute(statement)
             self.connection.commit()
             result = True
-            #print("query success:",statement)
         except Exception as e:
-            print(e)  
-            pass
+            print(e)
         return result
 
-    def deleteRow(self,tableName,key,keyValue):
-        # check first if data lenght match width the table to store data...
-        statement = "DELETE FROM "+tableName +" WHERE "+key +" = ?" 
+    @staticmethod
+    def _clean_empty_to_none(val):
+        if isinstance(val, str) and val.strip() == "":
+            return None
+        return val
+
+    def _sanitize_values_for_header(self, tableName, header, values):
+        nullable_cols = self._NUMERIC_NULLABLE_COLUMNS.get(tableName)
+        if not nullable_cols:
+            return values
+        vals = list(values)
+        # Extract column names from header (e.g. "(`op`,`tara`,...) values(...)" or "col1=%s,col2=%s")
+        import re
+        cols_part = header.split("values")[0] if "values" in header.lower() else header
+        cols = re.findall(r"`?([a-zA-Z0-9_]+)`?\s*(?:,|\)|=)", cols_part)
+        for idx, col in enumerate(cols):
+            if idx < len(vals) and col in nullable_cols:
+                vals[idx] = self._clean_empty_to_none(vals[idx])
+        return tuple(vals) if isinstance(values, tuple) else vals
+
+    def updateValue(self, tableName, keyValue, keyUbicacion):
+        statement = f"UPDATE `{tableName}` SET `{keyValue[0]}` = %s WHERE `{keyUbicacion[0]}` = %s"
         result = False
+        val = keyValue[1]
+        if keyValue[0] in self._NUMERIC_NULLABLE_COLUMNS.get(tableName, set()):
+            val = self._clean_empty_to_none(val)
         try:
-            ##print("statement: ",statement)
-            self.cursor.execute(statement,(keyValue,)) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (val, keyUbicacion[1]))
             self.connection.commit()
             result = True
-            #print("query success:",statement)
         except Exception as e:
-            print(e) 
-            pass 
-        return result        
-    def obtenerImpresora(self,tipo):
+            print(e)
+        return result
+
+    def deleteRow(self, tableName, key, keyValue):
+        statement = f"DELETE FROM `{tableName}` WHERE `{key}` = %s"
+        result = False
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement, (keyValue,))
+            self.connection.commit()
+            result = True
+        except Exception as e:
+            print(e)
+        return result
+
+    def obtenerImpresora(self, tipo):
+        result = False
+        table = []
         if tipo == "etiquetadora":
-            statement = f'SELECT printer2_name FROM config_proceso'
-            result = False
+            statement = "SELECT printer2_name FROM config_proceso"
             try:
-                self.cursor.execute(statement) 
+                self._ensure_connection()
+                self.cursor.execute(statement)
                 table = self.cursor.fetchall()
                 result = True
             except Exception as e:
                 print(e)
-        return result,table
-    def updateRow(self,tableName,headerUpdate,configUpdate,key):
-        # check first if data lenght match width the table to store data...
-        statement = "UPDATE "+tableName +" SET "+headerUpdate+" WHERE "+key +" = ?" 
+        return result, table
+
+    def updateRow(self, tableName, headerUpdate, configUpdate, key):
+        statement = f"UPDATE `{tableName}` SET {headerUpdate} WHERE `{key}` = %s"
         result = False
         try:
-            #print("statement: ",statement)
-            self.cursor.execute(statement,configUpdate) 
+            self._ensure_connection()
+            sanitized = self._sanitize_values_for_header(tableName, headerUpdate, configUpdate)
+            self.cursor.execute(statement, sanitized)
             self.connection.commit()
             result = True
-            #print("query success:",statement)
         except Exception as e:
-            print(e) 
-            pass 
+            print(e)
         return result
-    
-    def actualizar_fila(self,tablename,filtro,valores):
+
+    def actualizar_fila(self, tablename, filtro, valores):
         result = False
         if tablename == "productos":
             try:
-                self.cursor.execute(f'UPDATE {tablename} SET producto=?,peso_max=?,peso_min=? WHERE codigo_producto=?',(valores[0],valores[1],valores[2],filtro))
+                self._ensure_connection()
+                peso_max = self._clean_empty_to_none(valores[1])
+                peso_min = self._clean_empty_to_none(valores[2])
+                self.cursor.execute(
+                    f"UPDATE `{tablename}` SET producto=%s, peso_max=%s, peso_min=%s WHERE codigo_producto=%s",
+                    (valores[0], peso_max, peso_min, filtro),
+                )
                 self.connection.commit()
                 result = True
             except Exception as e:
                 print(e)
         elif tablename == "paletas":
             try:
-                self.cursor.execute(f'UPDATE {tablename} SET nombre=?,peso=? WHERE id=?',(valores[0],valores[1],filtro))
+                self._ensure_connection()
+                self.cursor.execute(
+                    f"UPDATE `{tablename}` SET nombre=%s, peso=%s WHERE id=%s",
+                    (valores[0], valores[1], filtro),
+                )
                 self.connection.commit()
                 result = True
             except Exception as e:
                 print(e)
         return result
 
-    # row = [value1,value2,value3,...,valuen]
-    def insertRow(self,tableName,header,values):
-        # check first if data lenght match width the table to store data...
-        statement = "INSERT INTO "+tableName + header
+    def insertRow(self, tableName, header, values):
+        statement = f"INSERT INTO `{tableName}` {header}"
         result = False
         try:
-            ##print("statement: ",statement)
-            self.cursor.execute(statement,values) 
+            self._ensure_connection()
+            sanitized = self._sanitize_values_for_header(tableName, header, values)
+            self.cursor.execute(statement, sanitized)
             self.connection.commit()
             result = True
-            #print("query success:",statement)
         except Exception as e:
             print(e)
-            pass  
         return result
 
-    def insertarFila(self,tablename,valores):
+    def insertarFila(self, tablename, valores):
         if tablename == "paletas":
-            self.cursor.execute(f'INSERT INTO {tablename} ("id","nombre","peso")  values(?,?,?)',valores)
-        self.connection.commit()
-
+            self._ensure_connection()
+            self.cursor.execute(
+                f"INSERT INTO `{tablename}` (`id`, `nombre`, `peso`) VALUES (%s, %s, %s)",
+                valores,
+            )
+            self.connection.commit()
 
     def insertValue(self):
         pass
 
-    def obtenerUltimaFila(self,table_name,filtro):
-       self.cursor.execute(f'SELECT * FROM {table_name} ORDER BY {filtro} DESC LIMIT 1')
-       tabla = self.cursor.fetchone()
-       return tabla
+    def obtenerUltimaFila(self, table_name, filtro):
+        self._ensure_connection()
+        self.cursor.execute(f"SELECT * FROM `{table_name}` ORDER BY `{filtro}` DESC LIMIT 1")
+        tabla = self.cursor.fetchone()
+        return tabla
 
-    def getLastRow(self,table,columnId):
-        statement = """SELECT * FROM """+table+""" WHERE """+columnId+""" = (SELECT MAX("""+columnId+""") FROM """+table+""");"""
+    def getLastRow(self, tableName, columnId):
+        statement = f"SELECT * FROM `{tableName}` WHERE `{columnId}` = (SELECT MAX(`{columnId}`) FROM `{tableName}`)"
         result = False
         table = []
         try:
-            ##print("statement: ",statement)
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement)
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement)
         except Exception as e:
-            pass
-            print(e)  
-        return result,table
-    
-    def getBobinasPallet_(self,op_,nPallet_):
-        statement = """SELECT * FROM proceso_bobina WHERE (op="""+str(op_)+""" and n_paleta="""+str(nPallet_)+""")"""
+            print(e)
+        return result, table
+
+    def getBobinasPallet_(self, op_, nPallet_):
+        statement = "SELECT * FROM proceso_bobina WHERE op = %s AND n_paleta = %s"
         result = False
         table = []
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (op_, nPallet_))
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    def sumarColumnaPesoBobinas(self,columna,filtro1,valor1,filtro2=None,valor2=None):
-        statement = f"SELECT SUM({columna}) AS suma_total FROM proceso_bobina WHERE ({filtro1}={valor1} and {filtro2}={valor2})"
+        return result, table
+
+    def sumarColumnaPesoBobinas(self, columna, filtro1, valor1, filtro2=None, valor2=None):
+        statement = f"SELECT SUM(`{columna}`) AS suma_total FROM proceso_bobina WHERE `{filtro1}` = %s AND `{filtro2}` = %s"
         result = False
+        table = None
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (valor1, valor2))
             table = self.cursor.fetchone()
             result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    def sumarpesoycantidadbobinas(self,op):
-        statement = f"SELECT SUM(peso_neto) AS suma_total, COUNT(*) AS cantidad FROM proceso_bobina WHERE op='{op}'"
-        result = False
+        return result, table
+
+    def sumarpesoycantidadbobinas(self, op):
+        statement = "SELECT SUM(peso_neto) AS suma_total, COUNT(*) AS cantidad FROM proceso_bobina WHERE op = %s"
+        table = None
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (op,))
             table = self.cursor.fetchone()
-            result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
         return table
 
-    def actualizarColumna(self,tableName,columnaName,columnaValue,filtro,valor):
-        statement = f"UPDATE {tableName}  SET {columnaName}=? WHERE {filtro}=?;"
+    def actualizarColumna(self, tableName, columnaName, columnaValue, filtro, valor):
+        statement = f"UPDATE `{tableName}` SET `{columnaName}` = %s WHERE `{filtro}` = %s"
         result = False
         try:
-            #print("statement: ",statement)
-            self.cursor.execute(statement,(columnaValue,valor,)) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (columnaValue, valor))
             self.connection.commit()
             result = True
-            #print("query success:",statement)
         except Exception as e:
-            print(e)  
-            pass
+            print(e)
         return result
 
-    def getLastPalletOp(self,op):
-        statement = f"SELECT * FROM proceso_bobina WHERE op='{op}' ORDER BY n_paleta DESC"
-        result = False
+    def getLastPalletOp(self, op):
+        statement = "SELECT * FROM proceso_bobina WHERE op = %s ORDER BY n_paleta DESC LIMIT 1"
+        table = None
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (op,))
             table = self.cursor.fetchone()
-            result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
         return table
 
-    def getBobinasPalletDeleted_(self,op_,nPallet_):
-        statement = """SELECT * FROM proceso_bobina_eliminados WHERE (op="""+op_+""" and n_paleta="""+nPallet_+""")"""
+    def getBobinasPalletDeleted_(self, op_, nPallet_):
+        statement = "SELECT * FROM proceso_bobina_eliminados WHERE op = %s AND n_paleta = %s"
         result = False
         table = []
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (op_, nPallet_))
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
+        return result, table
 
-
-    def getTable(self,tableName,nivel=None):
-        initTime = time.time()
-        #print("Init breakpoint at => 0 ")
-        statement = """SELECT * FROM """+ tableName
-        result = False
-        table = []
+    def getTable(self, tableName, nivel=None):
+        statement = f"SELECT * FROM `{tableName}`"
         if nivel == "supervisor":
-            statement = """SELECT * FROM """+ tableName + """ WHERE nivel == 'SUPERVISOR'"""
-            result = False
-            table = []
+            statement = f"SELECT * FROM `{tableName}` WHERE nivel = 'SUPERVISOR'"
         elif nivel == "operador":
-            statement = """SELECT * FROM """+ tableName + """ WHERE nivel == 'OPERADOR'"""
-            result = False
-            table = []
+            statement = f"SELECT * FROM `{tableName}` WHERE nivel = 'OPERADOR'"
         elif nivel == "all":
-            statement = """SELECT * FROM """+ tableName
-            result = False
-            table = []
-        try:
-            self.cursor.execute(statement) 
-            table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement,"\n",table)
-        except Exception as e:
-            pass
-            print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    def getTable_1(self,tablename,columna):
-        #print(sqlite3.sqlite_version)
-        # Configurar el cursor para devolver solo valores
-        #self.cursor.row_factory = lambda cursor, row: row[0]
-        statement = f'SELECT {columna} FROM {tablename}'
+            statement = f"SELECT * FROM `{tableName}`"
         result = False
+        table = []
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement)
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        self.cursor.row_factory = None
-        return result,table
-    
-    def getTable_2(self,tablename,columna):
-        # Configurar el cursor para devolver solo valores
-        self.cursor.row_factory = lambda cursor, row: row[0]
-        statement = f'SELECT {columna} FROM {tablename} ORDER BY ROWID DESC LIMIT 1000;'
+        return result, table
+
+    def getTable_1(self, tablename, columna):
+        statement = f"SELECT {columna} FROM `{tablename}`"
         result = False
+        table = []
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement)
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        self.cursor.row_factory = None
-        return result,table
-    
-    def getTable_new(self,tablename,columna):
+        return result, table
+
+    def getTable_2(self, tablename, columna):
+        statement = f"SELECT `{columna}` FROM `{tablename}` ORDER BY `{columna}` DESC LIMIT 1000"
+        result = False
+        table = []
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement)
+            table = [row[0] for row in self.cursor.fetchall()]
+            result = True
+        except Exception as e:
+            print(e)
+        return result, table
+
+    def getTable_new(self, tablename, columna):
+        result = False
+        table = []
         if tablename == "paletas":
-            statement = f'SELECT {columna} FROM {tablename}'
-            result = False
-            
-        try:
-            self.cursor.execute(statement) 
-            table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement,"\n",table)
-        except Exception as e:
-            pass
-            print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    
-    def gettablebytwo(self,tablename,condicion1,condicion2,valor1,valor2):
-        statement = f"""SELECT * FROM {tablename} WHERE (UPPER({condicion1}) = UPPER('{valor1}') and UPPER({condicion2}) = UPPER('{valor2}'))"""
-        result = False
-        #print(statement)
-        table = []
-        try:
-            self.cursor.execute(statement) 
-            table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement,"\n",table)
-        except Exception as e:
-            pass
-            print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    def getTable_andOrder(self,tableName,columna_orden):
-        initTime = time.time()
-        #print("Init breakpoint at => 0 ")
-        statement = f"SELECT * FROM {tableName} ORDER BY {columna_orden} ASC"
+            statement = f"SELECT {columna} FROM `{tablename}`"
+            try:
+                self._ensure_connection()
+                self.cursor.execute(statement)
+                table = self.cursor.fetchall()
+                result = True
+            except Exception as e:
+                print(e)
+        return result, table
+
+    def gettablebytwo(self, tablename, condicion1, condicion2, valor1, valor2):
+        statement = f"SELECT * FROM `{tablename}` WHERE (UPPER(`{condicion1}`) = UPPER(%s) AND UPPER(`{condicion2}`) = UPPER(%s))"
         result = False
         table = []
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (valor1, valor2))
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    def ultimoticket(self,tableName):
-        statement = """SELECT * FROM """ + tableName + " WHERE ticket=(SELECT MAX(ticket) FROM " + tableName + ")"
-        result= False
-        table = []
-        try:
-            ##print("statement: ",statement)
-            self.cursor.execute(statement) 
-            table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement," result: ",table)
-        except Exception as e:
-            pass
-            print(e)
-        return table
-    
-    def productByRow(self,oprow):
-        producto="'" + str(oprow[8]) + "'"
-        #print(f"Producto nuevo: {producto}")
-        statement = """SELECT * FROM productos WHERE codigo_producto="""+producto
+        return result, table
+
+    def getTable_andOrder(self, tableName, columna_orden):
+        statement = f"SELECT * FROM `{tableName}` ORDER BY `{columna_orden}` ASC"
         result = False
         table = []
         try:
-            ##print("statement: ",statement)
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement)
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement," result: ",table)
         except Exception as e:
-            pass
             print(e)
-        return table
-    
-    def clientID(self,clientid):
-        statement = """SELECT * FROM clientes WHERE id="""+str(clientid)
-        result = False
+        return result, table
+
+    def ultimoticket(self, tableName):
+        statement = f"SELECT * FROM `{tableName}` WHERE ticket = (SELECT MAX(ticket) FROM `{tableName}`)"
         table = []
         try:
-            ##print("statement: ",statement)
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement)
             table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement," result: ",table)
         except Exception as e:
-            pass
             print(e)
-        return table
-    
-    def samecoils(self,op):
-        statement = """SELECT * FROM proceso_bobina WHERE op="""+op
-        result = False
-        table = []
-        try:
-            ##print("statement: ",statement)
-            self.cursor.execute(statement) 
-            table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement," result: ",table)
-        except Exception as e:
-            pass
-            print(e)
-        return table
-    
-    def getcoilsOP(self,op):
-        statement = """SELECT * FROM proceso_bobina WHERE op="""+op
-        result = False
-        table = []
-        try:
-            self.cursor.execute(statement) 
-            table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement,"\n",table)
-        except Exception as e:
-            pass
-            print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    def samecoilsPallet(self,op,actualpallet):
-        statement = """SELECT * FROM proceso_bobina WHERE (op="""+str(op)+""" and n_paleta="""+str(actualpallet)+""")"""
-        result = False
-        table = []
-        try:
-            #print("statement: ",statement)
-            self.cursor.execute(statement) 
-            table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement," result: ",table)
-        except Exception as e:
-            pass
-            print(e)
-        #print(f"Tabla en samecoilsPallet: {table}")
         return table
 
-    def getProductFromCodeDB(self,code):
-        producto="'" + str(code) + "'"
-        #print(f"Producto nuevo: {producto}")
-        statement = """SELECT * FROM productos WHERE codigo_producto="""+producto
-        result = False
+    def productByRow(self, oprow):
+        statement = "SELECT * FROM productos WHERE codigo_producto = %s"
         table = []
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (str(oprow[8]),))
             table = self.cursor.fetchall()
-            result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
         return table
 
-    def getTableByRow(self,tableName,key,value):
-        statement = """SELECT * FROM """+ tableName + " WHERE " + key + "=?" 
+    def clientID(self, clientid):
+        statement = "SELECT * FROM clientes WHERE id = %s"
+        table = []
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement, (clientid,))
+            table = self.cursor.fetchall()
+        except Exception as e:
+            print(e)
+        return table
+
+    def samecoils(self, op):
+        statement = "SELECT * FROM proceso_bobina WHERE op = %s"
+        table = []
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement, (op,))
+            table = self.cursor.fetchall()
+        except Exception as e:
+            print(e)
+        return table
+
+    def getcoilsOP(self, op):
+        statement = "SELECT * FROM proceso_bobina WHERE op = %s"
         result = False
         table = []
         try:
-            #print("statement: ",statement)
-            self.cursor.execute(statement,(value,)) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (op,))
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement," result: ",table)
         except Exception as e:
-            pass
             print(e)
-        return result,table
+        return result, table
 
-    def getTableBy2Rows(self,tableName,key1,value1,key2,value2):
-        statement = """SELECT * FROM """+ tableName + " WHERE " + key1 + "=? AND " + key2 + "=?"
+    def samecoilsPallet(self, op, actualpallet):
+        statement = "SELECT * FROM proceso_bobina WHERE op = %s AND n_paleta = %s"
+        table = []
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement, (op, actualpallet))
+            table = self.cursor.fetchall()
+        except Exception as e:
+            print(e)
+        return table
+
+    def getProductFromCodeDB(self, code):
+        statement = "SELECT * FROM productos WHERE codigo_producto = %s"
+        table = []
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement, (str(code),))
+            table = self.cursor.fetchall()
+        except Exception as e:
+            print(e)
+        return table
+
+    def getTableByRow(self, tableName, key, value):
+        statement = f"SELECT * FROM `{tableName}` WHERE `{key}` = %s"
+        result = False
+        table = []
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement, (value,))
+            table = self.cursor.fetchall()
+            result = True
+        except Exception as e:
+            print(e)
+        return result, table
+
+    def getTableBy2Rows(self, tableName, key1, value1, key2, value2):
+        statement = f"SELECT * FROM `{tableName}` WHERE `{key1}` = %s AND `{key2}` = %s"
         row = []
         try:
-            #print("statement: ",statement)
-            self.cursor.execute(statement,(value1,value2,)) 
+            self._ensure_connection()
+            self.cursor.execute(statement, (value1, value2))
             row = self.cursor.fetchall()
-            #print("query success:",statement," result: ",table)
         except Exception as e:
-            pass
             print(e)
         return row
 
-    def getCustomTable(self,header,tableName):
-        initTime = time.time()
-        #print("Init breakpoint at => 0 ")
-        statement = """SELECT """+header+""" FROM """+ tableName
+    def getCustomTable(self, header, tableName):
+        statement = f"SELECT {header} FROM `{tableName}`"
         result = False
         table = []
         try:
-            self.cursor.execute(statement) 
+            self._ensure_connection()
+            self.cursor.execute(statement)
             table = self.cursor.fetchall()
             result = True
-            #print("query success:",statement,"\n",table)
         except Exception as e:
-            pass
             print(e)
-        #print("breakpoint FETCH TABLE at=>",time.time()-initTime)
-        return result,table
-    
-    def Obtenter_Tabla_condicionada(self,table_name,columnas,where):
+        return result, table
+
+    def Obtenter_Tabla_condicionada(self, table_name, columnas, where):
+        table = []
         if table_name == "proceso_bobina":
-            statement = f"""SELECT {columnas} FROM {table_name} WHERE {where}"""
-        #☻print(statement)
-        table = []
-        try:
-            self.cursor.execute(statement)
-            table = self.cursor.fetchall()
-        except Exception as e:
-            print(e)
+            statement = f"SELECT {columnas} FROM `{table_name}` WHERE {where}"
+            try:
+                self._ensure_connection()
+                self.cursor.execute(statement)
+                table = self.cursor.fetchall()
+            except Exception as e:
+                print(e)
         return table
 
-    def getProduct_by(self,columna,filtro,valor=None):
+    def getProduct_by(self, columna, filtro, valor=None):
         if filtro == "ALL":
-            statement = f"""SELECT {columna} FROM productos"""
+            statement = f"SELECT {columna} FROM productos"
         else:
-            statement = f"""SELECT {columna} FROM productos WHERE {filtro} = {valor}"""
+            statement = f"SELECT {columna} FROM productos WHERE `{filtro}` = %s"
         table = []
         try:
+            self._ensure_connection()
+            if filtro == "ALL":
+                self.cursor.execute(statement)
+            else:
+                self.cursor.execute(statement, (valor,))
+            table = self.cursor.fetchall()
+        except Exception as e:
+            print(e)
+        return table
+
+    def execute(self, statement):
+        try:
+            self._ensure_connection()
+            self.cursor.execute(statement)
+            self.connection.commit()
+        except Exception as e:
+            print(e)
+
+    def obtenerTabla_unique(self, table_name, filtro):
+        statement = f"SELECT DISTINCT `{filtro}` FROM `{table_name}`"
+        table = []
+        try:
+            self._ensure_connection()
             self.cursor.execute(statement)
             table = self.cursor.fetchall()
         except Exception as e:
             print(e)
         return table
-        
-    def execute(self,statement):
-        try:
-            self.cursor.execute(statement)
-        except Exception as e:
-            pass
-            #print("No se pudo ejecutar la sentencia SQL, ",e)
-
-
-    def obtenerTabla_unique(self,table_name,filtro):
-        statement = f'SELECT DISTINCT {filtro} FROM {table_name}'
-        table = []
-        try:
-            self.cursor.execute(statement)
-            table = self.cursor.fetchall()
-        except Exception as e:
-            print(e)
-        return table
-    
-    def connect(self):
-        result = False
-        try:
-            self.connection = sqlite3.connect(self.dbPath)#, Password="tutankamon")
-            result = True
-        except Exception as e:
-            pass
-            print(e)
-        return result
 
     def close(self):
         result = False
         try:
-            self.connection.commit()
-            self.cursor.close()
-            self.connection.close() 
-            result = True  
+            if self.connection and self.connection.is_connected():
+                self.connection.commit()
+                if self.cursor:
+                    self.cursor.close()
+                self.connection.close()
+            result = True
         except Exception as e:
-            pass
             print(e)
-        return result      
+        return result

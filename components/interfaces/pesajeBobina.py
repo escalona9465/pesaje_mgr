@@ -15,6 +15,7 @@ from portCommngmt import disablePort,enablePort
 
 import time
 import sys
+from datetime import date
 
 
 """**********************************************************************************************************
@@ -787,10 +788,7 @@ class UiPesoWindow(object):
 
     def loadTodayTickets(self):
         # It makes error when op gets deleted from op list and get store theirs tickets
-        success,table = self.objmgr.dbMGR.getTable("proceso_bobina")
-        #print("\nresult getting products for today tickets:\n",products)
-
-        table = getTodayTickets(table)
+        success,table = self.objmgr.dbMGR.getTableByRow("proceso_bobina","fecha_emision",str(date.today()))
         #print("table for today=>",table)
         if success:
             for i in range(len(table)):
@@ -1456,7 +1454,7 @@ class UiPesoWindow(object):
                     cuCountBobinas = len(self.objmgr.countBobinasPalletNew(op,countPallet))
                     #tiempo_countbobinas=time.time()-inicio_countbobinas
                     #print(f"tiempo countbobinas: {tiempo_countbobinas}")
-                    countMax = opRow[3]
+                    countMax = int(opRow[3]) if opRow[3] not in (None, "") else 99999
                 #print("countMax=>",countMax," cuCountBobinas=>",cuCountBobinas)
                 if countMax <= cuCountBobinas:
                     #print("You area trying to exceed the current amount of coils")
@@ -1596,14 +1594,14 @@ class UiPesoWindow(object):
         #
         fechaEmision = date
                                                     #(12,1.0,1.0,23,23,"25/06/2022",1256845,3020)
-        success,tickets = self.objmgr.dbMGR.getTable("proceso_bobina") 
+        last_ticket_rows = self.objmgr.dbMGR.ultimoticket("proceso_bobina")
         hablador = ""
         totalOp = ""
+        ticket = "1"
 
-        if success:
-            if tickets!=[]:
-                #ticket = str(int(getLastTicket(tickets)[0])+1)
-                ticket = str(int(self.objmgr.dbMGR.ultimoticket("proceso_bobina")[0][0])+1)
+        if True:
+            if last_ticket_rows:
+                ticket = str(int(last_ticket_rows[0][0])+1)
 
             op = self.lineOp.currentText()
             #product = self.comboBoxProd.currentText()
@@ -1644,8 +1642,7 @@ class UiPesoWindow(object):
                 successStoreOp = self.objmgr.storeOp(dataOp)
                 #print("Success storing op at DB, data:",dataOp," result:",successStoreOp)
                 ###########
-                success,newTickets = self.objmgr.dbMGR.getTable("proceso_bobina")
-                bobina = str( countBobinasPallet(newTickets,op,actPallet) ) # this is the number coil over the pallet
+                bobina = str(len(self.objmgr.countBobinasPalletNew(op,actPallet))) # this is the number coil over the pallet
                 #print("1bobina=",bobina,"\ntickets=",newTickets,"\nop=",op," pallet=",actPallet)
                 ###########
             else:
@@ -1676,9 +1673,6 @@ class UiPesoWindow(object):
 
                 successStore = self.objmgr.storeTicket(data)
                 ###########
-                success,newTickets = self.objmgr.dbMGR.getTable("proceso_bobina")
-                #success_deleted,deletedTickets = self.objmgr.dbMGR.getTable("proceso_bobina_eliminados")  
-                #bobina = countBobinasPallet(newTickets,op,actPallet)  # this is the number coil over the pallet
                 bobina = len(self.objmgr.countBobinasPalletNew(op,actPallet))
                 #bobinas_eliminados =  countBobinasPallet(deletedTickets,op,actPallet)
                 bobinas_eliminados =  len(self.objmgr.countBobinasPalletNew_Deleted(op,actPallet))
@@ -1743,18 +1737,17 @@ class UiPesoWindow(object):
         return result 
 
     def readFieldsPallet(self):
-        #Firs read all databases
-        successCoils, coils = self.objmgr.getCoilsOnDB()
-        successClients,dataClient = self.objmgr.getClientsOnDB()
+        # Read only relevant records using indexed queries
         op = self.lineOp.currentText()
         actualPallet = self.linePaletaAct.text()
         try:
             actualPallet = str( int(self.linePaletaAct.text()) - 1  )
         except:
             pass
+        successCoils, coilsForPallet = self.objmgr.dbMGR.getBobinasPallet_(op, actualPallet)
+        successClients,dataClient = self.objmgr.getClientsOnDB()
         fullDate = getFullDate()
         dataOp = self.objmgr.getAnOp(op)
-        coilsForPallet = []
         dataPallet = [] #getTicketsForPallet(coilsForPallet)
         clientCode = ""
         productCode = ""
@@ -1770,7 +1763,6 @@ class UiPesoWindow(object):
             #print("result updating pallet counter, ",resultIncPallet)
         bobinas = 0 #str(dataOp[3])# Verificado 03/06/2022 # Verify, this is the number of coils per pallet of the order, not the counter.
         
-        coilsForPallet = getTheSameCoilsPallet(coils,op,actualPallet)
         pesoBruto, pesoNeto = getTotalsForPallet(coilsForPallet)
         bobinas,dataPallet = getTicketsForPallet(coilsForPallet) 
 
@@ -1914,14 +1906,9 @@ class UiPesoWindow(object):
         self.tablaPesaje.setRowCount(self.rowCount) 
 
     def palletHasTicket(self):
-        result = False
-        success,coils = self.objmgr.getCoilsOnDB()
         op = self.lineOp.currentText()
         cuPallet = self.linePaletaAct.text()
-        if success:
-            result = lookForTicketOnPallet(op,cuPallet,coils)
-            #print("result=>",result," ticket on pallet=>",result)
-        return result
+        return len(self.objmgr.countBobinasPalletNew(op,cuPallet)) > 0
     
     """def eventFilter(self, obj, event):
         #print("ENTER PRESIONADO")
@@ -1980,7 +1967,7 @@ class UiPesoWindow(object):
             if len(opRow)>0 and result:
                 #print("oprow for scree values=> ",opRow)
                 totalPallet = int(opRow[2])
-                totalBobina = int(opRow[3]) 
+                totalBobina = int(opRow[3]) if opRow[3] not in (None, "") else 0 
                 #currentCountPallet = countPallets(arrTickets) # check if there is necesari to show the value for tickets or op
                 currentCountPallet = int(opRow[4])
                 #currentCountBobina = countBobinas(arrTickets,op,currentCountPallet)

@@ -11,4 +11,5 @@ HISTORY.txt
 README.txt
 .qt_for_python/
 *.pdf
+.env
 
